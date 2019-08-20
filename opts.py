@@ -24,8 +24,8 @@ def linear(x, channels, sn = True, update_collection = None, scope = 'linear'):
      with tf.variable_scope(scope):
           w = tf.get_variable("w", [shape[-1], channels], tf.float32, initializer = weight_init)
           b = tf.get_variable('b', [channels], initializer = tf.constant_initializer(0.0))
-
-     return tf.matmul(x, spectral_norm(w, update_collection)) + b
+          rtn = tf.matmul(x, spectral_norm(w, update_collection)) + b
+     return rtn
 
 def downsample(x):
      return tf.layers.average_pooling2d(x, pool_size = 2, strides = 2, padding = 'SAME')
@@ -34,25 +34,21 @@ def upsample(x, scale = 2):
      _, h, w, _ = x.get_shape().as_list()
      return tf.image.resize_bilinear(x, size = [h * scale, w * scale])
 
-def upblock(x_init, labels, channels, num_classes, is_t, ntype = '', scope = ''):
+def upblock(x_init, labels, channels, num_classes, is_t, scope = 'upblock'):
      with tf.variable_scope(scope):
-          x = batch_norm(x_init, labels, num_classes, is_t, scope = 'cbn_1')
+          x = batch_norm(x_init, is_t, num_classes, y = labels, scope = 'cbn_1')
           x = relu(x)
           x = upsample(x, scale = 2)
           x = conv(x, channels, kernel = 3, scope = 'conv_1')
-          x = batch_norm(x, labels, num_classes, is_t, scope = 'cbn_2')
+          x = batch_norm(x, is_t, num_classes, y = labels, scope = 'cbn_2')
           x = relu(x)
           x = conv(x, channels, kernel = 3, scope = 'conv_2')
-
           res = upsample(x_init, scale = 2)
           res = conv(res, channels, kernel = 1, scope = 'res_1')
-
           x = x + res
-          if ntype == 'attention':
-               x = self_attention(x, channels)
      return x
 
-def downblock(x_init, channels, ntype = '', update_collection = None, down = True, scope = ''):
+def downblock(x_init, channels, update_collection = None, down = True, scope = 'downblock'):
      with tf.variable_scope(scope):  
           x = relu(x_init)
           x = conv(x, channels, kernel = 3, update_collection = update_collection, scope = 'conv_1')
@@ -62,10 +58,7 @@ def downblock(x_init, channels, ntype = '', update_collection = None, down = Tru
           if down:
                x = downsample(x)
                res = downsample(res)
-
           x = x + res
-          if ntype == 'attention':
-               x = self_attention(x, channels, update_collection)
      return x
 
 def inputblock(x_init, channels, update_collection = None, scope = ''):
@@ -143,24 +136,32 @@ def spectral_norm(w, update_collection = None, num_iters = 1):
 
      return w_bar
 
-def batch_norm(x, y, number_classes, is_t, cond = True, scope = 'batch_norm'):
+def batch_norm(x, is_t, number_classes = 105, y = None, cond = True, scope = 'batch_norm', decay = 0.9):
      with tf.variable_scope(scope):
-          if cond:
-               gamma = tf.get_variable('gamma', [number_classes, x.shape[-1]], initializer = tf.ones_initializer(), trainable = True)
+          if cond:    
+               moving_shape = tf.TensorShape([1, 1, 1]).concatenate(x.shape[-1])
+               
+               gamma = tf.get_variable('gamma', [number_classes, x.shape[-1]], initializer = tf.ones_initializer()) 
                gamma = tf.reshape(tf.nn.embedding_lookup(gamma, y), [-1, 1, 1, x.shape[-1]])
-
-               beta = tf.get_variable('beta', [number_classes, x.shape[-1]], initializer = tf.zeros_initializer(), trainable = True)        
+               
+               beta = tf.get_variable('beta', [number_classes, x.shape[-1]], initializer = tf.zeros_initializer())
                beta = tf.reshape(tf.nn.embedding_lookup(beta, y), [-1, 1, 1, x.shape[-1]])
+               
+               moving_mean = tf.get_variable('moving_mean', moving_shape, initializer = tf.zeros_initializer())
+               moving_var = tf.get_variable('moving_var', moving_shape, initializer = tf.ones_initializer()) 
 
-               batch_mean, batch_var = tf.nn.moments(x, [0, 1, 2], name = 'moments', keep_dims = True)
-               ema = tf.train.ExponentialMovingAverage(decay=0.999)
-               def mean_var_with_update():
-                    ema_apply_op = ema.apply([batch_mean, batch_var])
-                    with tf.control_dependencies([ema_apply_op]):
-                         return tf.identity(batch_mean), tf.identity(batch_var)
-               mean, var = tf.cond(is_t, mean_var_with_update, lambda: (ema.average(batch_mean), ema.average(batch_var)))
-               return tf.nn.batch_normalization(x, batch_mean, batch_var, beta, gamma, 1e-5)
+               def is_training():
+                    batch_mean, batch_var = tf.nn.moments(x, [0, 1, 2], name = 'moments', keep_dims = True)  
+                    mean = tf.assign(moving_mean, moving_mean * decay + batch_mean * (1 - decay))
+                    var = tf.assign(moving_var, moving_var * decay + batch_var * (1 - decay))
+                    with tf.control_dependencies([mean, var]):
+                         return tf.identity(mean), tf.identity(var)
+               
+               mean, var = tf.cond(is_t, is_training, lambda: (moving_mean, moving_var))
+
+               return tf.nn.batch_normalization(x, mean, var, beta, gamma, 1e-5)
           else:
-               return tf_contrib.layers.batch_norm(x , epsilon = 1e-5, decay = 0.9, center=True, is_training = is_t, 
-                                                  scale = True, scope = scope, updates_collections = None)
+               return tf_contrib.layers.batch_norm(x , epsilon = 1e-5, decay = 0.9, is_training = is_t, scale = True, scope = scope)
+
+
      
