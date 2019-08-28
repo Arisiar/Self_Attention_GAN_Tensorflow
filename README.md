@@ -1,4 +1,4 @@
-"# Self-Attention Generative Adversarial Networks" 
+# Self-Attention Generative Adversarial Networks
 
   [Paper](https://arxiv.org/pdf/1805.08318.pdf)
 
