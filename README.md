@@ -18,7 +18,7 @@ The tensorFlow implementation of Self-Attention Generative Adversarial Networks 
 - G Learning rate 0.0001
 - D Learning rate 0.0004
 
-### Summary
+## Summary
 This test is desined to generate 64 x 64 images instead of 128 x 128 in original SAGAN models.
 
 <img src="./img/self-attention_module.jpg" width="900px"/>
